@@ -11,24 +11,29 @@
 
 static volatile sig_atomic_t go = 0;
 
-void handle_signal(int sig) {
+void handle_signal(int sig)
+{
     (void)sig;
     go = 1;
 }
-int main(void) {
+
+int main(void)
+{
     int fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
-    if (fd == -1) {
+    if (fd == -1) 
+    {
         perror("shm_open failed");
         exit(1);
     }
 
-    struct Dungeon *d = mmap(NULL, sizeof(struct Dungeon),
-                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    struct Dungeon *d = mmap(NULL, sizeof(struct Dungeon),PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    if (d == MAP_FAILED) {
+    if (d == MAP_FAILED)
+    {
         perror("mmap failed");
         exit(1);
     }
+   
     struct sigaction sa = {0};
     sa.sa_handler = handle_signal;
     sigemptyset(&sa.sa_mask);
@@ -38,8 +43,10 @@ int main(void) {
 
     printf("Barbarian ready! PID=%d\n", getpid());
 
-    while (d->running) {
-        if (!go) {
+    while (d->running) 
+    {
+        if (!go) 
+        {
             usleep(1000); 
             continue;
         }
