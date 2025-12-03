@@ -1,7 +1,7 @@
 // rogue.c
 // Rogue does a binary search on pick angle to open the lock.
 
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
