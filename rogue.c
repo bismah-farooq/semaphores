@@ -1,124 +1,104 @@
-// rogue.c
-// Rogue does a binary search on pick angle to open the lock.
-
 #define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/mman.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
-#include <stdbool.h>
+#include <signal.h>
+#include <unistd.h>
 #include <math.h>
-#include <string.h>
 
 #include "dungeon_info.h"
-#include "dungeon_settings.h"
 
 #ifndef ROGUE_SIGNAL
-#define ROGUE_SIGNAL     SIGTERM
-#endif
-#ifndef SEMAPHORE_SIGNAL
-#define SEMAPHORE_SIGNAL SIGINT
+#define ROGUE_SIGNAL SIGUSR2
 #endif
 
-static volatile sig_atomic_t got_signal = 0;
+static struct Dungeon *dungeon = NULL;
+// Move the rogue's pick toward the trap value in shared memory
+static void pick_lock(void) {
+    // trap.direction is a char; cast to unsigned char before using it as a number
+    float target = (float)(unsigned char)dungeon->trap.direction;
 
-static void rogue_handle(int s) {
-    (void)s;
-    got_signal = 1;  // mainly to avoid crashing; we also poll
+    while (dungeon->running && dungeon->trap.locked) {
+        float pick = dungeon->rogue.pick;
+
+        // If we're close enough, snap to exact target and stop
+        if (fabsf(pick - target) <= 0.5f) {
+            dungeon->rogue.pick = target;
+            break;
+        }
+
+        if (pick < target) {
+            dungeon->rogue.pick = pick + 1.0f;
+        } else {
+            dungeon->rogue.pick = pick - 1.0f;
+        }
+
+        // give dungeon time to notice the update
+        usleep(TIME_BETWEEN_ROGUE_TICKS / 2);
+    }
+}
+
+// Signal handler called when the dungeon pings the rogue
+static void rogue_handler(int sig) {
+    if (dungeon == NULL) {
+        return;
+    }
+
+    // Only react to the correct signal
+    if (sig != ROGUE_SIGNAL) {
+        return;
+    }
+
+    // If the dungeon is done, exit so success is registered
+    if (!dungeon->running) {
+        _exit(0);
+    }
+
+    // Work on the trap if it's still locked
+    if (dungeon->trap.locked) {
+        pick_lock();
+    }
 }
 
 int main(void) {
-    int fd = -1;
-    for (int tries = 0; tries < 50 && fd == -1; ++tries) {
-        fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
-        if (fd == -1) usleep(100000);
-    }
+    // Attach to shared memory created by the dungeon
+    int fd = shm_open(dungeon_shm_name, O_RDWR, 0);
     if (fd == -1) {
-        fprintf(stderr, "rogue: could not open /DungeonMem. run game first.\n");
-        return 1;
+        perror("rogue shm_open");
+        return EXIT_FAILURE;
     }
 
-    struct Dungeon *d = mmap(NULL, sizeof(*d),
-                             PROT_READ | PROT_WRITE,
-                             MAP_SHARED,
-                             fd,
-                             0);
+    dungeon = mmap(NULL, sizeof(*dungeon),
+                   PROT_READ | PROT_WRITE,
+                   MAP_SHARED,
+                   fd, 0);
     close(fd);
-    if (d == MAP_FAILED) {
-        perror("rogue: mmap");
-        return 1;
+
+    if (dungeon == MAP_FAILED) {
+        perror("rogue mmap");
+        return EXIT_FAILURE;
     }
 
+    // Set up signal handler for the rogue
     struct sigaction sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = rogue_handle;
+    sa.sa_handler = rogue_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = 0;
 
-    sigaction(ROGUE_SIGNAL, &sa, NULL);
-    sigaction(SEMAPHORE_SIGNAL, &sa, NULL);
-
-    printf("rogue ready (pid=%d)\n", getpid());
-    fflush(stdout);
-
-    // State for current trap session
-    bool in_session = false;
-    double low = 0.0, high = 0.0;
-    double pick = 0.0;
-
-    while (d->running) {
-        // wait a tiny bit between polls to be nice
-        usleep(TIME_BETWEEN_ROGUE_TICKS);
-
-        // If there is no active trap, reset and wait
-        if (!d->trap.locked) {
-            in_session = false;
-            continue;
-        }
-
-        // New trap session: initialize search range
-        if (!in_session) {
-            in_session = true;
-            low = 0.0;
-            high = MAX_PICK_ANGLE;
-            pick = (low + high) / 2.0;
-            d->rogue.pick = (float)pick;
-            // let the dungeon react
-            // printf("rogue: starting trap, pick=%.3f\n", pick);
-            continue;
-        }
-
-        // Now respond to dungeon's direction hints
-        char dir = d->trap.direction;
-
-        if (dir == 'u') {
-            // need to go higher
-            low = pick;
-            pick = (low + high) / 2.0;
-            d->rogue.pick = (float)pick;
-            // printf("rogue: dir=u, pick=%.3f\n", pick);
-        } else if (dir == 'd') {
-            // need to go lower
-            high = pick;
-            pick = (low + high) / 2.0;
-            d->rogue.pick = (float)pick;
-            // printf("rogue: dir=d, pick=%.3f\n", pick);
-        } else if (dir == '-') {
-            // success!
-            printf("rogue: lock opened at pick=%.3f\n", pick);
-            d->trap.locked = false;
-            in_session = false;
-        } else {
-            // 'w' or 't' or whatever: dungeon is thinking, just wait
-            continue;
-        }
+    if (sigaction(ROGUE_SIGNAL, &sa, NULL) == -1) {
+        perror("rogue sigaction");
+        return EXIT_FAILURE;
     }
 
-    munmap(d, sizeof(*d));
-    return 0;
+    // Wait for the dungeon to ping us; exit when dungeon->running is false
+    while (dungeon->running) {
+        pause();
+    }
+
+    munmap(dungeon, sizeof(*dungeon));
+    return EXIT_SUCCESS;
 }
 
