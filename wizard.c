@@ -1,7 +1,7 @@
 // wizard.c
 // Wizard decodes Caesar cipher in barrier.spell into wizard.spell.
 
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
