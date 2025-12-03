@@ -1,7 +1,7 @@
 // barbarian.c
 // Barbarian copies enemy health into attack when signaled.
 
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +38,7 @@ int main(void) {
     for (int tries = 0; tries < 50 && fd == -1; ++tries) {
         fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
         if (fd == -1) {
-            usleep(100000); // 0.1s, wait for game to create it
+            usleep(100000);   // 0.1 s
         }
     }
     if (fd == -1) {
@@ -83,7 +83,7 @@ int main(void) {
         }
         g_go = 0;
 
-        // Assignment: when signaled, copy enemy health into attack
+        // When signaled, copy enemy health into attack
         d->barbarian.attack = d->enemy.health;
 
         // Dungeon will wait SECONDS_TO_ATTACK and then compare
