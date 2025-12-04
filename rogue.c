@@ -1,4 +1,6 @@
 // rogue.c
+// Rogue: systematically sweep the pick across 0..100 until the trap unlocks.
+
 #define _DEFAULT_SOURCE
 
 #include <stdio.h>
@@ -8,22 +10,26 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
+#include <string.h> 
 
 #include "dungeon_info.h"
 #include "dungeon_settings.h"
 
+// If dungeon_settings.h defines this, fine; otherwise default:
 #ifndef ROGUE_SIGNAL
 #define ROGUE_SIGNAL SIGUSR2
 #endif
 
 static struct Dungeon *dungeon = NULL;
 
+// Sweep the pick through [0, 100] in steps until dungeon->trap.locked becomes false.
 static void pick_lock(void) {
     if (!dungeon) return;
 
     while (dungeon->running && dungeon->trap.locked) {
         float pick = dungeon->rogue.pick;
 
+        // Move the pick forward by 1 each iteration, wrap at 100 -> 0
         pick += 1.0f;
         if (pick > 100.0f) {
             pick = 0.0f;
@@ -31,15 +37,19 @@ static void pick_lock(void) {
 
         dungeon->rogue.pick = pick;
 
+        // Let the dungeon see the update
         usleep(TIME_BETWEEN_ROGUE_TICKS / 2);
     }
 }
 
+// Simple handler: just wake up pause()
 static void rogue_handler(int sig) {
-    (void)sig; 
+    (void)sig; // same response for all signals we install
+    // pause() will return after a signal is caught
 }
 
 int main(void) {
+    // Attach to shared memory created by the game/dungeon.
     int fd = -1;
     for (int tries = 0; tries < 50 && fd == -1; ++tries) {
         fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
@@ -74,7 +84,7 @@ int main(void) {
     if (sigaction(ROGUE_SIGNAL, &sa, NULL) == -1) {
         perror("rogue sigaction(ROGUE_SIGNAL)");
     }
-
+    // …and *also* for SIGUSR1 and SIGUSR2, in case the dungeon uses either.
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
         perror("rogue sigaction(SIGUSR1)");
     }
@@ -82,12 +92,14 @@ int main(void) {
         perror("rogue sigaction(SIGUSR2)");
     }
 
+    // Main loop: wait to be pinged; when trap is locked, sweep until it unlocks.
     while (dungeon->running) {
-        pause();  
+        pause();  // wait for a signal from the dungeon
 
         if (!dungeon->running) {
-            break; // dungeon is shutting down
-        }
+ 	   memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
+   	   _exit(0);
+	}
 
         if (dungeon->trap.locked) {
             pick_lock();
