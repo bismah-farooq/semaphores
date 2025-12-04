@@ -1,5 +1,6 @@
 // barbarian.c
-// Barbarian copies enemy health into attack when signaled.
+// Barbarian copies enemy health into attack when signaled
+// and pulls the treasure levers using semaphores.
 
 #define _DEFAULT_SOURCE
 
@@ -12,6 +13,7 @@
 #include <sys/stat.h>
 #include <stdbool.h>
 #include <string.h>
+#include <semaphore.h>   // <-- semaphores
 
 #include "dungeon_info.h"
 #include "dungeon_settings.h"
@@ -24,12 +26,20 @@
 #define SEMAPHORE_SIGNAL    SIGINT
 #endif
 
-static volatile sig_atomic_t g_go = 0;
+static volatile sig_atomic_t g_go        = 0;  // "do attack" flag
+static volatile sig_atomic_t g_do_levers = 0;  // "pull levers" flag
 
-// simple signal handler: just set a flag
+// simple signal handler
 static void handle_signal(int sig) {
+    // For compatibility with your original working version:
+    // ANY signal we care about will cause an attack.
     (void)sig;
     g_go = 1;
+
+    // Specifically remember when the semaphore signal arrives
+    if (sig == SEMAPHORE_SIGNAL) {
+        g_do_levers = 1;
+    }
 }
 
 int main(void) {
@@ -68,26 +78,52 @@ int main(void) {
         perror("barbarian: sigaction BARBARIAN_SIGNAL");
     }
     if (sigaction(SEMAPHORE_SIGNAL, &sa, NULL) == -1) {
-        // we just don't want to crash if dungeon sends this
+        // just don't crash if dungeon sends this
         perror("barbarian: sigaction SEMAPHORE_SIGNAL");
     }
 
     printf("barbarian ready (pid=%d)\n", getpid());
     fflush(stdout);
 
+    bool levers_done = false;
+
     // Main loop
     while (d->running) {
-        if (!g_go) {
-            usleep(1000); // 1ms; just spin until signaled
-            continue;
+        if (g_go) {
+            g_go = 0;
+
+            // When signaled, copy enemy health into attack
+            d->barbarian.attack = d->enemy.health;
+
+            // Dungeon will wait SECONDS_TO_ATTACK and then compare
+            sleep(SECONDS_TO_ATTACK);
         }
-        g_go = 0;
 
-        // When signaled, copy enemy health into attack
-        d->barbarian.attack = d->enemy.health;
+        // Handle lever semaphores once, when dungeon tells us to
+        if (g_do_levers && !levers_done) {
+            g_do_levers = 0;
+            levers_done = true;
 
-        // Dungeon will wait SECONDS_TO_ATTACK and then compare
-        sleep(SECONDS_TO_ATTACK);
+            // Try to open and down the first lever semaphore
+            sem_t *lever1 = sem_open(dungeon_lever_one, 0);
+            if (lever1 != SEM_FAILED) {
+                sem_wait(lever1);   // pull lever one
+                sem_close(lever1);
+            } else {
+                perror("barbarian: sem_open lever one");
+            }
+
+            // Try to open and down the second lever semaphore
+            sem_t *lever2 = sem_open(dungeon_lever_two, 0);
+            if (lever2 != SEM_FAILED) {
+                sem_wait(lever2);   // pull lever two
+                sem_close(lever2);
+            } else {
+                perror("barbarian: sem_open lever two");
+            }
+        }
+
+        usleep(1000); // 1ms; avoid busy spin
     }
 
     munmap(d, sizeof(*d));
