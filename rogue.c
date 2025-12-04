@@ -1,3 +1,4 @@
+// rogue.c
 #define _DEFAULT_SOURCE
 
 #include <stdio.h>
@@ -7,65 +8,45 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
-#include <math.h>
 
 #include "dungeon_info.h"
+#include "dungeon_settings.h"
 
 #ifndef ROGUE_SIGNAL
 #define ROGUE_SIGNAL SIGUSR2
 #endif
 
 static struct Dungeon *dungeon = NULL;
-// Move the rogue's pick toward the trap value in shared memory
+
 static void pick_lock(void) {
-    // trap.direction is a char; cast to unsigned char before using it as a number
-    float target = (float)(unsigned char)dungeon->trap.direction;
+    if (!dungeon) return;
 
     while (dungeon->running && dungeon->trap.locked) {
         float pick = dungeon->rogue.pick;
 
-        // If we're close enough, snap to exact target and stop
-        if (fabsf(pick - target) <= 0.5f) {
-            dungeon->rogue.pick = target;
-            break;
+        pick += 1.0f;
+        if (pick > 100.0f) {
+            pick = 0.0f;
         }
 
-        if (pick < target) {
-            dungeon->rogue.pick = pick + 1.0f;
-        } else {
-            dungeon->rogue.pick = pick - 1.0f;
-        }
+        dungeon->rogue.pick = pick;
 
-        // give dungeon time to notice the update
         usleep(TIME_BETWEEN_ROGUE_TICKS / 2);
     }
 }
 
-// Signal handler called when the dungeon pings the rogue
 static void rogue_handler(int sig) {
-    if (dungeon == NULL) {
-        return;
-    }
-
-    // Only react to the correct signal
-    if (sig != ROGUE_SIGNAL) {
-        return;
-    }
-
-    // If the dungeon is done, exit so success is registered
-    if (!dungeon->running) {
-        _exit(0);
-    }
-
-    // Work on the trap if it's still locked
-    if (dungeon->trap.locked) {
-        pick_lock();
-    }
+    (void)sig; 
 }
 
 int main(void) {
-    // Attach to shared memory created by the dungeon
-    int fd = shm_open(dungeon_shm_name, O_RDWR, 0);
+    int fd = -1;
+    for (int tries = 0; tries < 50 && fd == -1; ++tries) {
+        fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
+        if (fd == -1) {
+            usleep(100000); // 0.1 s
+        }
+    }
     if (fd == -1) {
         perror("rogue shm_open");
         return EXIT_FAILURE;
@@ -74,7 +55,8 @@ int main(void) {
     dungeon = mmap(NULL, sizeof(*dungeon),
                    PROT_READ | PROT_WRITE,
                    MAP_SHARED,
-                   fd, 0);
+                   fd,
+                   0);
     close(fd);
 
     if (dungeon == MAP_FAILED) {
@@ -82,20 +64,34 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    // Set up signal handler for the rogue
+    // Set up signal handler for the rogue.
     struct sigaction sa;
     sa.sa_handler = rogue_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
+    // Install for the macro-defined signal…
     if (sigaction(ROGUE_SIGNAL, &sa, NULL) == -1) {
-        perror("rogue sigaction");
-        return EXIT_FAILURE;
+        perror("rogue sigaction(ROGUE_SIGNAL)");
     }
 
-    // Wait for the dungeon to ping us; exit when dungeon->running is false
+    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
+        perror("rogue sigaction(SIGUSR1)");
+    }
+    if (sigaction(SIGUSR2, &sa, NULL) == -1) {
+        perror("rogue sigaction(SIGUSR2)");
+    }
+
     while (dungeon->running) {
-        pause();
+        pause();  
+
+        if (!dungeon->running) {
+            break; // dungeon is shutting down
+        }
+
+        if (dungeon->trap.locked) {
+            pick_lock();
+        }
     }
 
     munmap(dungeon, sizeof(*dungeon));
