@@ -56,41 +56,33 @@ static void pick_lock(void) {
 // ---------------------------------------------------------
 // Treasure / semaphore logic
 // ---------------------------------------------------------
-static void handle_treasure_and_semaphores(void) {
+// ---------------------------------------------------------
+// Treasure logic ONLY - Rogue does NOT touch semaphores.
+// ---------------------------------------------------------
+static void handle_treasure(void) {
     if (!dungeon) return;
 
-    // Open the two lever semaphores created by the dungeon/game.
-    sem_t *lever1 = sem_open(dungeon_lever_one, 0);
-    sem_t *lever2 = sem_open(dungeon_lever_two, 0);
+    printf("[Rogue] Starting treasure collection...\n");
+    fflush(stdout);
 
-    if (lever1 == SEM_FAILED || lever2 == SEM_FAILED) {
-        perror("rogue: sem_open");
-        if (lever1 != SEM_FAILED && lever1 != NULL) sem_close(lever1);
-        if (lever2 != SEM_FAILED && lever2 != NULL) sem_close(lever2);
-        return;
+    // Collect 4 characters of treasure over TIME_TREASURE_AVAILABLE seconds.
+    // We read one char per second so the dungeon has time to write them.
+    for (int i = 0; i < 4; ++i) {
+        sleep(1);  // give the dungeon time to put the next character
+
+        char c = dungeon->treasure[i];
+        dungeon->spoils[i] = c;
+
+        printf("[Rogue] Got treasure[%d] = %c\n", i, c ? c : ' ');
+        fflush(stdout);
     }
 
-    // "Down" both levers (wait). Initial value is 1, so this should be quick.
-    if (sem_wait(lever1) == -1) {
-        perror("rogue: sem_wait lever1");
-    }
-    if (sem_wait(lever2) == -1) {
-        perror("rogue: sem_wait lever2");
-    }
-
-    // Copy the treasure into spoils so the dungeon can score and print it.
-    memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
-
-    // Allow the door to close again by posting both levers
-    if (sem_post(lever1) == -1) {
-        perror("rogue: sem_post lever1");
-    }
-    if (sem_post(lever2) == -1) {
-        perror("rogue: sem_post lever2");
-    }
-
-    sem_close(lever1);
-    sem_close(lever2);
+    printf("[Rogue] Finished treasure: %c%c%c%c\n",
+           dungeon->spoils[0],
+           dungeon->spoils[1],
+           dungeon->spoils[2],
+           dungeon->spoils[3]);
+    fflush(stdout);
 }
 
 // ---------------------------------------------------------
@@ -102,7 +94,6 @@ static void rogue_handler(int sig) {
     } else if (sig == SEMAPHORE_SIGNAL) {
         got_semaphore_signal = 1;
     }
-    // pause() will return after this
 }
 
 // ---------------------------------------------------------
@@ -165,11 +156,10 @@ int main(void) {
 
         if (got_semaphore_signal) {
             got_semaphore_signal = 0;
-            handle_treasure_and_semaphores();
+            handle_treasure();
         }
     }
 
     munmap(dungeon, sizeof(*dungeon));
     return EXIT_SUCCESS;
 }
-
