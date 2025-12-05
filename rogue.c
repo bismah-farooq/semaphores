@@ -1,6 +1,5 @@
 // rogue.c
-// Rogue: pick locks during dungeon rounds, then pull semaphores
-// for the treasure room when signaled.
+// Rogue: handles traps AND treasure/semaphore logic.
 
 #define _DEFAULT_SOURCE
 
@@ -17,26 +16,33 @@
 #include "dungeon_info.h"
 #include "dungeon_settings.h"
 
-// We’ll handle both DUNGEON_SIGNAL (normal trap rounds)
-// and SEMAPHORE_SIGNAL (treasure room).
-// If your instructor gave a different ROGUE_SIGNAL, we still
-// install handlers for SIGUSR1 and SIGUSR2 explicitly.
+// If these are changed in dungeon_settings.h, we use those values:
+#ifndef DUNGEON_SIGNAL
+#define DUNGEON_SIGNAL   SIGUSR1   // regular dungeon ping (traps)
+#endif
+
+#ifndef SEMAPHORE_SIGNAL
+#define SEMAPHORE_SIGNAL SIGUSR2   // treasure room / semaphore signal
+#endif
 
 static struct Dungeon *dungeon = NULL;
-static volatile sig_atomic_t last_sig = 0;
 
-// ------------------ Lock picking logic ------------------
+// Flags set by signal handler:
+static volatile sig_atomic_t got_dungeon_signal   = 0;
+static volatile sig_atomic_t got_semaphore_signal = 0;
 
-// Sweep the pick through [0, 100] in steps until trap unlocks.
+// ---------------------------------------------------------
+// Trap logic: sweep roulette-style 0..MAX_PICK_ANGLE
+// ---------------------------------------------------------
 static void pick_lock(void) {
     if (!dungeon) return;
 
     while (dungeon->running && dungeon->trap.locked) {
         float pick = dungeon->rogue.pick;
 
-        // Move the pick forward by 1 each iteration, wrap at 100 -> 0
+        // Move the pick forward by 1 each iteration, wrap at MAX_PICK_ANGLE -> 0
         pick += 1.0f;
-        if (pick > 100.0f) {
+        if (pick > (float)MAX_PICK_ANGLE) {
             pick = 0.0f;
         }
 
@@ -47,23 +53,24 @@ static void pick_lock(void) {
     }
 }
 
-// ------------------ Treasure room / semaphores ------------------
-
-// When the dungeon sends SEMAPHORE_SIGNAL, the treasure door is open.
-// Down both levers, copy the treasure, then release the levers.
-static void handle_treasure_room(void) {
+// ---------------------------------------------------------
+// Treasure / semaphore logic
+// ---------------------------------------------------------
+static void handle_treasure_and_semaphores(void) {
     if (!dungeon) return;
 
-    // Open existing semaphores created in game.c
+    // Open the two lever semaphores created by the dungeon/game.
     sem_t *lever1 = sem_open(dungeon_lever_one, 0);
     sem_t *lever2 = sem_open(dungeon_lever_two, 0);
 
     if (lever1 == SEM_FAILED || lever2 == SEM_FAILED) {
         perror("rogue: sem_open");
+        if (lever1 != SEM_FAILED && lever1 != NULL) sem_close(lever1);
+        if (lever2 != SEM_FAILED && lever2 != NULL) sem_close(lever2);
         return;
     }
 
-    // Down both levers (sem_wait -> value goes to 0)
+    // "Down" both levers (wait). Initial value is 1, so this should be quick.
     if (sem_wait(lever1) == -1) {
         perror("rogue: sem_wait lever1");
     }
@@ -71,10 +78,10 @@ static void handle_treasure_room(void) {
         perror("rogue: sem_wait lever2");
     }
 
-    // Copy treasure out while door is "open"
+    // Copy the treasure into spoils so the dungeon can score and print it.
     memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
 
-    // Release the levers (post back up) before time expires
+    // Allow the door to close again by posting both levers
     if (sem_post(lever1) == -1) {
         perror("rogue: sem_post lever1");
     }
@@ -86,16 +93,23 @@ static void handle_treasure_room(void) {
     sem_close(lever2);
 }
 
-// ------------------ Signal handler ------------------
-
+// ---------------------------------------------------------
+// Signal handler
+// ---------------------------------------------------------
 static void rogue_handler(int sig) {
-    last_sig = sig;   // Just record which signal we got
+    if (sig == DUNGEON_SIGNAL) {
+        got_dungeon_signal = 1;
+    } else if (sig == SEMAPHORE_SIGNAL) {
+        got_semaphore_signal = 1;
+    }
+    // pause() will return after this
 }
 
-// ------------------ main ------------------
-
+// ---------------------------------------------------------
+// main
+// ---------------------------------------------------------
 int main(void) {
-    // Attach to shared memory created by the game/dungeon.
+    // Attach to shared memory created by the dungeon/game.
     int fd = -1;
     for (int tries = 0; tries < 50 && fd == -1; ++tries) {
         fd = shm_open(dungeon_shm_name, O_RDWR, 0666);
@@ -120,44 +134,38 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    // Set up signal handlers.
+    // Set up signal handlers for both dungeon and semaphore signals.
     struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = rogue_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
-    // Normal dungeon signal for trap rounds
     if (sigaction(DUNGEON_SIGNAL, &sa, NULL) == -1) {
         perror("rogue sigaction(DUNGEON_SIGNAL)");
     }
-    // Semaphore signal for treasure room
     if (sigaction(SEMAPHORE_SIGNAL, &sa, NULL) == -1) {
         perror("rogue sigaction(SEMAPHORE_SIGNAL)");
     }
-    // Handle SIGTERM so we can exit cleanly when game is done
-    if (sigaction(SIGTERM, &sa, NULL) == -1) {
-        perror("rogue sigaction(SIGTERM)");
-    }
 
-    // Main loop
+    // Main loop: respond to signals until dungeon stops running.
     while (dungeon->running) {
-        pause();  // wait for a signal
+        pause();  // sleep until *some* signal arrives
 
         if (!dungeon->running) {
             break;
         }
 
-        if (last_sig == DUNGEON_SIGNAL) {
-            // Trap rounds
+        if (got_dungeon_signal) {
+            got_dungeon_signal = 0;
             if (dungeon->trap.locked) {
                 pick_lock();
             }
-        } else if (last_sig == SEMAPHORE_SIGNAL) {
-            // Treasure room logic (semaphores + copying treasure)
-            handle_treasure_room();
-        } else if (last_sig == SIGTERM) {
-            // Game told us to die
-            break;
+        }
+
+        if (got_semaphore_signal) {
+            got_semaphore_signal = 0;
+            handle_treasure_and_semaphores();
         }
     }
 
