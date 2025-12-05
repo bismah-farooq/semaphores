@@ -1,5 +1,6 @@
 // rogue.c
-// Rogue: systematically sweep the pick across 0..100 until the trap unlocks.
+// Rogue: pick locks during dungeon rounds, then pull semaphores
+// for the treasure room when signaled.
 
 #define _DEFAULT_SOURCE
 
@@ -11,18 +12,22 @@
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
+#include <semaphore.h>
 
 #include "dungeon_info.h"
 #include "dungeon_settings.h"
 
-// If dungeon_settings.h defines this, fine; otherwise default:
-#ifndef ROGUE_SIGNAL
-#define ROGUE_SIGNAL SIGUSR2
-#endif
+// We’ll handle both DUNGEON_SIGNAL (normal trap rounds)
+// and SEMAPHORE_SIGNAL (treasure room).
+// If your instructor gave a different ROGUE_SIGNAL, we still
+// install handlers for SIGUSR1 and SIGUSR2 explicitly.
 
 static struct Dungeon *dungeon = NULL;
+static volatile sig_atomic_t last_sig = 0;
 
-// Sweep the pick through [0, 100] in steps until dungeon->trap.locked becomes false.
+// ------------------ Lock picking logic ------------------
+
+// Sweep the pick through [0, 100] in steps until trap unlocks.
 static void pick_lock(void) {
     if (!dungeon) return;
 
@@ -42,11 +47,52 @@ static void pick_lock(void) {
     }
 }
 
-// Simple handler: just wake up pause()
-static void rogue_handler(int sig) {
-    (void)sig; // same response for all signals we install
-    // pause() will return after a signal is caught
+// ------------------ Treasure room / semaphores ------------------
+
+// When the dungeon sends SEMAPHORE_SIGNAL, the treasure door is open.
+// Down both levers, copy the treasure, then release the levers.
+static void handle_treasure_room(void) {
+    if (!dungeon) return;
+
+    // Open existing semaphores created in game.c
+    sem_t *lever1 = sem_open(dungeon_lever_one, 0);
+    sem_t *lever2 = sem_open(dungeon_lever_two, 0);
+
+    if (lever1 == SEM_FAILED || lever2 == SEM_FAILED) {
+        perror("rogue: sem_open");
+        return;
+    }
+
+    // Down both levers (sem_wait -> value goes to 0)
+    if (sem_wait(lever1) == -1) {
+        perror("rogue: sem_wait lever1");
+    }
+    if (sem_wait(lever2) == -1) {
+        perror("rogue: sem_wait lever2");
+    }
+
+    // Copy treasure out while door is "open"
+    memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
+
+    // Release the levers (post back up) before time expires
+    if (sem_post(lever1) == -1) {
+        perror("rogue: sem_post lever1");
+    }
+    if (sem_post(lever2) == -1) {
+        perror("rogue: sem_post lever2");
+    }
+
+    sem_close(lever1);
+    sem_close(lever2);
 }
+
+// ------------------ Signal handler ------------------
+
+static void rogue_handler(int sig) {
+    last_sig = sig;   // Just record which signal we got
+}
+
+// ------------------ main ------------------
 
 int main(void) {
     // Attach to shared memory created by the game/dungeon.
@@ -74,44 +120,47 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    // Set up signal handler for the rogue.
+    // Set up signal handlers.
     struct sigaction sa;
     sa.sa_handler = rogue_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
-    // Install for the macro-defined signal…
-    if (sigaction(ROGUE_SIGNAL, &sa, NULL) == -1) {
-        perror("rogue sigaction(ROGUE_SIGNAL)");
+    // Normal dungeon signal for trap rounds
+    if (sigaction(DUNGEON_SIGNAL, &sa, NULL) == -1) {
+        perror("rogue sigaction(DUNGEON_SIGNAL)");
     }
-    // …and *also* for SIGUSR1 and SIGUSR2, in case the dungeon uses either.
-    if (sigaction(SIGUSR1, &sa, NULL) == -1) {
-        perror("rogue sigaction(SIGUSR1)");
+    // Semaphore signal for treasure room
+    if (sigaction(SEMAPHORE_SIGNAL, &sa, NULL) == -1) {
+        perror("rogue sigaction(SEMAPHORE_SIGNAL)");
     }
-    if (sigaction(SIGUSR2, &sa, NULL) == -1) {
-        perror("rogue sigaction(SIGUSR2)");
+    // Handle SIGTERM so we can exit cleanly when game is done
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+        perror("rogue sigaction(SIGTERM)");
     }
 
-    // Main loop: wait to be pinged; when trap is locked, sweep until it unlocks.
+    // Main loop
     while (dungeon->running) {
-        pause();  // wait for a signal from the dungeon
+        pause();  // wait for a signal
 
-        // If the dungeon is done, copy treasure -> spoils safely and exit.
         if (!dungeon->running) {
-            // Copy up to 3 chars and ensure null-termination
-            dungeon->spoils[0] = dungeon->treasure[0];
-            dungeon->spoils[1] = dungeon->treasure[1];
-            dungeon->spoils[2] = dungeon->treasure[2];
-            dungeon->spoils[3] = '\0';
-            _exit(0);
+            break;
         }
 
-        if (dungeon->trap.locked) {
-            pick_lock();
+        if (last_sig == DUNGEON_SIGNAL) {
+            // Trap rounds
+            if (dungeon->trap.locked) {
+                pick_lock();
+            }
+        } else if (last_sig == SEMAPHORE_SIGNAL) {
+            // Treasure room logic (semaphores + copying treasure)
+            handle_treasure_room();
+        } else if (last_sig == SIGTERM) {
+            // Game told us to die
+            break;
         }
     }
 
-    // Fallback cleanup (normally we exit from inside the loop).
     munmap(dungeon, sizeof(*dungeon));
     return EXIT_SUCCESS;
 }
