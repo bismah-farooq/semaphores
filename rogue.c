@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
-#include <string.h> 
+#include <string.h>
 
 #include "dungeon_info.h"
 #include "dungeon_settings.h"
@@ -96,16 +96,22 @@ int main(void) {
     while (dungeon->running) {
         pause();  // wait for a signal from the dungeon
 
+        // If the dungeon is done, copy treasure -> spoils safely and exit.
         if (!dungeon->running) {
- 	   memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
-   	   _exit(0);
-	}
+            // Copy up to 3 chars and ensure null-termination
+            dungeon->spoils[0] = dungeon->treasure[0];
+            dungeon->spoils[1] = dungeon->treasure[1];
+            dungeon->spoils[2] = dungeon->treasure[2];
+            dungeon->spoils[3] = '\0';
+            _exit(0);
+        }
 
         if (dungeon->trap.locked) {
             pick_lock();
         }
     }
 
+    // Fallback cleanup (normally we exit from inside the loop).
     munmap(dungeon, sizeof(*dungeon));
     return EXIT_SUCCESS;
 }
