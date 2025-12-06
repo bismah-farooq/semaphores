@@ -94,7 +94,7 @@ int main(void){
         return EXIT_FAILURE;
     }
     if (sigaction(SEMAPHORE_SIGNAL, &sa, NULL) == -1) {
-        perror("wizard sigaction SEMAPHORE_SIGNAL");
+        perror("wizard sigaction SEMAPORE_SIGNAL");
         return EXIT_FAILURE;
     }
 
@@ -102,6 +102,6 @@ int main(void){
         pause(); // sleep until any signal arrive 
     }
 
-    munmap(g_dungeon, sizeof(struct Dungeon)); //unmap shared memory 
+    munmap(g_dungeon, sizeof(struct Dungeon)); //unmap shared memory
     return EXIT_SUCCESS; // exit 
 }
