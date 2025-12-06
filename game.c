@@ -103,13 +103,8 @@ int main(void) {
     kill(barbarian_pid, SIGTERM);
     kill(wizard_pid, SIGTERM);
     kill(rogue_pid, SIGTERM);
-
-    // 6) Cleanup
-    sem_close(lever1);
-    sem_close(lever2);
-    sem_unlink(dungeon_lever_one);
-    sem_unlink(dungeon_lever_two);
-
+	
+    sleep(1);
     munmap(d, sizeof(struct Dungeon));
     shm_unlink(dungeon_shm_name);
 
