@@ -100,26 +100,48 @@ int main(void) {
         }
 
         // Handle lever semaphores once, when dungeon tells us to
-        if (g_do_levers && !levers_done) {
+                if (g_do_levers && !levers_done) {
             g_do_levers = 0;
             levers_done = true;
 
-            // Try to open and down the first lever semaphore
             sem_t *lever1 = sem_open(dungeon_lever_one, 0);
-            if (lever1 != SEM_FAILED) {
-                sem_wait(lever1);   // pull lever one
-                sem_close(lever1);
-            } else {
-                perror("barbarian: sem_open lever one");
-            }
-
-            // Try to open and down the second lever semaphore
             sem_t *lever2 = sem_open(dungeon_lever_two, 0);
-            if (lever2 != SEM_FAILED) {
-                sem_wait(lever2);   // pull lever two
-                sem_close(lever2);
+
+            if (lever1 == SEM_FAILED || lever2 == SEM_FAILED) {
+                perror("barbarian: sem_open lever(s)");
+                if (lever1 != SEM_FAILED && lever1 != NULL) sem_close(lever1);
+                if (lever2 != SEM_FAILED && lever2 != NULL) sem_close(lever2);
             } else {
-                perror("barbarian: sem_open lever two");
+                printf("[Barbarian] Received SEMAPHORE_SIGNAL (holding both levers)\n");
+                fflush(stdout);
+
+                // Pull both levers down (door opens)
+                if (sem_wait(lever1) == -1) {
+                    perror("barbarian: sem_wait lever1");
+                }
+                if (sem_wait(lever2) == -1) {
+                    perror("barbarian: sem_wait lever2");
+                }
+
+                printf("[Barbarian] Holding levers while Rogue gets treasure...\n");
+                fflush(stdout);
+
+                // Keep the door open long enough for the Rogue to read treasure
+                sleep(TIME_TREASURE_AVAILABLE);
+
+                // Release levers (door can close again)
+                if (sem_post(lever2) == -1) {
+                    perror("barbarian: sem_post lever2");
+                }
+                if (sem_post(lever1) == -1) {
+                    perror("barbarian: sem_post lever1");
+                }
+
+                printf("[Barbarian] Released levers\n");
+                fflush(stdout);
+
+                sem_close(lever1);
+                sem_close(lever2);
             }
         }
 
@@ -129,4 +151,3 @@ int main(void) {
     munmap(d, sizeof(*d));
     return 0;
 }
-
