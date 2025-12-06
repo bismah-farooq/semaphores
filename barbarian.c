@@ -1,25 +1,24 @@
 // barbarian.c
-// Barbarian copies enemy health into attack when signaled
-// and pulls the treasure levers using semaphores.
+// Barbarian copies enemy health into attack when signaled and pulls the treasure levers using semaphores.
 
-#define _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE // enables POSIX extensions 
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <stdbool.h>
-#include <string.h>
+#include <stdio.h> // printf()
+#include <stdlib.h>// exit codes 
+#include <unistd.h>//sleep()
+#include <signal.h>//signal handling 
+#include <sys/mman.h> // shared memory
+#include <fcntl.h> // flags 
+#include <sys/stat.h>//permission mkdes 
+#include <stdbool.h>// bool type //memset()
+#include <string.h>//POSIX semaphores 
 #include <semaphore.h>   // <-- semaphores
 
-#include "dungeon_info.h"
-#include "dungeon_settings.h"
+#include "dungeon_info.h" //sundeon struct definition and semaphore names 
+#include "dungeon_settings.h" // game settings and signal numbers 
 
-// Fallbacks if dungeon_settings.h doesn't define them:
-#ifndef BARBARIAN_SIGNAL
+// Fallbacks if dungeon_settings.h doesn't define them
+#ifndef BARBARIAN_SIGNAL // the signal used for barbarian attack rounds 
 #define BARBARIAN_SIGNAL    SIGUSR1
 #endif
 #ifndef SEMAPHORE_SIGNAL
@@ -29,12 +28,10 @@
 static volatile sig_atomic_t g_go        = 0;  // "do attack" flag
 static volatile sig_atomic_t g_do_levers = 0;  // "pull levers" flag
 
-// simple signal handler
+// signal handler
 static void handle_signal(int sig) {
-    // For compatibility with your original working version:
-    // ANY signal we care about will cause an attack.
     (void)sig;
-    g_go = 1;
+    g_go = 1; //it resets when any signal is recieved 
 
     // Specifically remember when the semaphore signal arrives
     if (sig == SEMAPHORE_SIGNAL) {
@@ -55,24 +52,24 @@ int main(void) {
         fprintf(stderr, "barbarian: could not open /DungeonMem. run game first.\n");
         return 1;
     }
-
+// map the shared memory struct into this process 
     struct Dungeon *d = mmap(NULL, sizeof(*d),
                              PROT_READ | PROT_WRITE,
                              MAP_SHARED,
                              fd,
                              0);
-    close(fd);
+    close(fd); // done with file descriptor 
     if (d == MAP_FAILED) {
         perror("barbarian: mmap");
         return 1;
     }
 
-    // Set up sigaction
+    // Set up signla handlers for barbarian signal and semaphore signal 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_signal;
+    sa.sa_handler = handle_signal; // function to call when signal arrive 
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
+    sa.sa_flags = SA_RESTART; // restart syscalls if interupted by a signal 
 
     if (sigaction(BARBARIAN_SIGNAL, &sa, NULL) == -1) {
         perror("barbarian: sigaction BARBARIAN_SIGNAL");
@@ -89,8 +86,8 @@ int main(void) {
 
     // Main loop
     while (d->running) {
-        if (g_go) {
-            g_go = 0;
+        if (g_go) { // of barbarian signal arrivs 
+            g_go = 0; // reset attack signal flag 
 
             // When signaled, copy enemy health into attack
             d->barbarian.attack = d->enemy.health;
@@ -103,10 +100,10 @@ int main(void) {
                 if (g_do_levers && !levers_done) {
             g_do_levers = 0;
             levers_done = true;
-
+//both open levers 
             sem_t *lever1 = sem_open(dungeon_lever_one, 0);
             sem_t *lever2 = sem_open(dungeon_lever_two, 0);
-
+//error check for sem open 
             if (lever1 == SEM_FAILED || lever2 == SEM_FAILED) {
                 perror("barbarian: sem_open lever(s)");
                 if (lever1 != SEM_FAILED && lever1 != NULL) sem_close(lever1);
@@ -139,15 +136,15 @@ int main(void) {
 
                 printf("[Barbarian] Released levers\n");
                 fflush(stdout);
-
+// close semaphore handlers 
                 sem_close(lever1);
                 sem_close(lever2);
             }
         }
 
-        usleep(1000); // 1ms; avoid busy spin
+        usleep(1000); //  avoid busy spin
     }
-
+// unmap shared memory before exit
     munmap(d, sizeof(*d));
     return 0;
 }
