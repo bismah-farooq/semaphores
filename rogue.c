@@ -58,6 +58,10 @@ static void pick_lock(void) {
 // ---------------------------------------------------------
 // ---------------------------------------------------------
 // Treasure logic ONLY - Rogue does NOT touch semaphores.
+// ------------------------------------------------
+// ---------------------------------------------------------
+// Treasure logic ONLY - Rogue does NOT touch semaphores.
+// Copy treasure near the *end* of the door-open window.
 // ---------------------------------------------------------
 static void handle_treasure(void) {
     if (!dungeon) return;
@@ -65,16 +69,20 @@ static void handle_treasure(void) {
     printf("[Rogue] Starting treasure collection...\n");
     fflush(stdout);
 
-    // Collect 4 characters of treasure over TIME_TREASURE_AVAILABLE seconds.
-    // We read one char per second so the dungeon has time to write them.
+    // Give the dungeon time to fully populate the treasure.
+    // Barbarian holds the door open for TIME_TREASURE_AVAILABLE seconds.
+    // We wait until near the end, then copy all 4 chars at once.
+    if (TIME_TREASURE_AVAILABLE > 2) {
+        sleep(TIME_TREASURE_AVAILABLE - 2);  // e.g., 8 seconds if TIME_TREASURE_AVAILABLE = 10
+    }
+
+    // Copy the full treasure array into spoils.
+    memcpy(dungeon->spoils, dungeon->treasure, sizeof(dungeon->spoils));
+
+    printf("[Rogue] Final treasure values:\n");
     for (int i = 0; i < 4; ++i) {
-        sleep(1);  // give the dungeon time to put the next character
-
-        char c = dungeon->treasure[i];
-        dungeon->spoils[i] = c;
-
-        printf("[Rogue] Got treasure[%d] = %c\n", i, c ? c : ' ');
-        fflush(stdout);
+        char c = dungeon->spoils[i];
+        printf("  spoils[%d] = '%c'\n", i, c ? c : ' ');
     }
 
     printf("[Rogue] Finished treasure: %c%c%c%c\n",
