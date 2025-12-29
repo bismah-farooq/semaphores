@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/VT0WPhcB)
 # CECS 326 Lab 2: Concurrent Processing, Shared Memory, and Semaphores
 
@@ -199,3 +200,6 @@ Submit your files through your git repository. Your submission must follow the f
 
 * Do not use compression on your files
 * Make sure that all significant code is *commented* with your own explanations
+=======
+# semaphores
+>>>>>>> a199f31d7f42c2c5b88075c46cd13df9c582e83e
